@@ -11,7 +11,8 @@ import provider.oauth2.views
 import provider.oauth2.forms
 import provider.scope
 from provider.oauth2.models import AccessToken
-from provider.oauth2.views import OAuthError, Capture, Redirect  # pylint: disable=unused-import
+from provider.oauth2.views import OAuthError, OAuth2AccessTokenMixin
+from provider.oauth2.views import Capture, Redirect  # pylint: disable=unused-import
 
 import oauth2_provider.oidc as oidc
 from oauth2_provider import constants
@@ -22,8 +23,103 @@ from oauth2_provider.forms import (AuthorizationRequestForm, AuthorizationForm,
                                    RefreshTokenGrantForm, AuthorizationCodeGrantForm)
 
 
+class OIDCTokenMixin(OAuth2AccessTokenMixin):
+
+    # pylint: disable=super-on-old-class
+    def access_token_response_data(self, access_token, response_type=None):
+        """
+        Return `access_token` fields for OAuth2, and add `id_token` fields for
+        OpenID Connect according to the `access_token` scope.
+
+        """
+        # Clear the scope for requests that do not use OpenID Connect.
+        # Scopes for pure OAuth2 request are currently not supported.
+        scope = constants.DEFAULT_SCOPE
+
+        extra_data = {}
+
+        # Add OpenID Connect `id_token` if requested.
+        #
+        # TODO: Unfortunately because of how django-oauth2-provider implements
+        # scopes, we cannot check if `openid` is the first scope to be
+        # requested, as required by OpenID Connect specification.
+
+        if not provider.scope.check(constants.OPEN_ID_SCOPE, access_token.scope):
+            if response_type and 'id_token' in response_type.split():
+                # http://openid.net/specs/openid-connect-core-1_0.html#AuthRequest:
+                #   If the openid scope value is not present, the behavior is entirely unspecified.
+                #
+                # For our purposes, we'll treat this as a plain OAuth2 request and fall
+                # back to the default behavior, *unless* the 'id_token' scope is present,
+                # which is OIDC-specific, in which case we assume that the client has made
+                # an error.
+                raise OAuthError({'error': 'invalid_scope'})
+            return super(OIDCTokenMixin, self).access_token_response_data(access_token, response_type)
+
+        if response_type and 'code' not in response_type and 'id_token' not in response_type:
+            # http://openid.net/specs/openid-connect-core-1_0.html#ImplicitFlowAuth:
+            #   While OAuth 2.0 also defines the token Response Type value for the Implicit Flow,
+            #   OpenID Connect does not use this Response Type, since no ID Token would be returned.
+            #
+            # A request with the 'openid' scope that does not use either 'code' or
+            # 'id_token' response types is invalid under OIDC.
+            raise OAuthError({
+                u'error': u'invalid_request',
+                u'error_description': u'response_type "{}" is invalid when using scope "openid"'.format(response_type)
+            })
+
+        id_token = self.get_id_token(access_token)
+        extra_data['id_token'] = self.encode_id_token(id_token)
+        scope = provider.scope.to_int(*id_token.scopes)
+
+        # Update the token scope, so it includes only authorized values.
+        access_token.scope = scope
+        access_token.save()
+
+        # Get the main fields for OAuth2 response.
+        response_data = super(OIDCTokenMixin, self).access_token_response_data(access_token, response_type)
+        if response_type and not response_type.endswith(' token'):
+            del response_data['access_token']
+            del response_data['token_type']
+
+        # Add any additional fields if OpenID Connect is requested. The order of
+        # the addition makes sures the OAuth2 values are not overridden.
+        response_data = dict(extra_data.items() + response_data.items())
+
+        return response_data
+
+    def get_id_token(self, access_token):
+        """ Return an ID token for the given Access Token. """
+
+        claims_string = self.request.POST.get('claims')
+        claims_request = json.loads(claims_string) if claims_string else {}
+
+        # Use a nonce to prevent replay attacks.
+        nonce = self.request.POST.get('nonce')
+
+        return oidc.id_token(access_token, nonce, claims_request)
+
+    def encode_id_token(self, id_token):
+        """
+        Return encoded ID token.
+
+        """
+
+        # Encode the ID token using the `client_secret`.
+        #
+        # TODO: Using the `client_secret` is not ideal, since it is transmitted
+        # over the wire in some authentication flows.  A better alternative is
+        # to use the public key of the issuer, which also allows the ID token to
+        # be shared among clients. Doing so however adds some operational
+        # costs. We should consider this for the future.
+
+        secret = id_token.access_token.client.client_secret
+
+        return id_token.encode(secret)
+
+
 # pylint: disable=abstract-method
-class Authorize(provider.oauth2.views.Authorize):
+class Authorize(OIDCTokenMixin, provider.oauth2.views.Authorize):
     """
     edX customized authorization view:
       - Introduces trusted clients, which do not require user consent.
@@ -44,7 +140,7 @@ class Authorize(provider.oauth2.views.Authorize):
 
 
 # pylint: disable=abstract-method
-class AccessTokenView(provider.oauth2.views.AccessTokenView):
+class AccessTokenView(provider.oauth2.views.AccessTokenView, OIDCTokenMixin):
     """
     Customized OAuth2 access token view.
 
@@ -86,73 +182,6 @@ class AccessTokenView(provider.oauth2.views.AccessTokenView):
         if not form.is_valid():
             raise OAuthError(form.errors)
         return form.cleaned_data
-
-    # pylint: disable=super-on-old-class
-    def access_token_response_data(self, access_token):
-        """
-        Return `access_token` fields for OAuth2, and add `id_token` fields for
-        OpenID Connect according to the `access_token` scope.
-
-        """
-
-        # Clear the scope for requests that do not use OpenID Connect.
-        # Scopes for pure OAuth2 request are currently not supported.
-        scope = constants.DEFAULT_SCOPE
-
-        extra_data = {}
-
-        # Add OpenID Connect `id_token` if requested.
-        #
-        # TODO: Unfourtunately because of how django-oauth2-provider implements
-        # scopes, we cannot check if `openid` is the first scope to be
-        # requested, as required by OpenID Connect specification.
-
-        if provider.scope.check(constants.OPEN_ID_SCOPE, access_token.scope):
-            id_token = self.get_id_token(access_token)
-            extra_data['id_token'] = self.encode_id_token(id_token)
-            scope = provider.scope.to_int(*id_token.scopes)
-
-        # Update the token scope, so it includes only authorized values.
-        access_token.scope = scope
-        access_token.save()
-
-        # Get the main fields for OAuth2 response.
-        response_data = super(AccessTokenView, self).access_token_response_data(access_token)
-
-        # Add any additional fields if OpenID Connect is requested. The order of
-        # the addition makes sures the OAuth2 values are not overrided.
-        response_data = dict(extra_data.items() + response_data.items())
-
-        return response_data
-
-    def get_id_token(self, access_token):
-        """ Return an ID token for the given Access Token. """
-
-        claims_string = self.request.POST.get('claims')
-        claims_request = json.loads(claims_string) if claims_string else {}
-
-        # Use a nonce to prevent replay attacks.
-        nonce = self.request.POST.get('nonce')
-
-        return oidc.id_token(access_token, nonce, claims_request)
-
-    def encode_id_token(self, id_token):
-        """
-        Return encoded ID token.
-
-        """
-
-        # Encode the ID token using the `client_secret`.
-        #
-        # TODO: Using the `client_secret` is not ideal, since it is transmitted
-        # over the wire in some authentication flows.  A better alternative is
-        # to use the public key of the issuer, which also allows the ID token to
-        # be shared among clients. Doing so however adds some operational
-        # costs. We should consider this for the future.
-
-        secret = id_token.access_token.client.client_secret
-
-        return id_token.encode(secret)
 
 
 class ProtectedView(View):
