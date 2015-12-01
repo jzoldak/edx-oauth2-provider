@@ -7,12 +7,10 @@ import json
 from django.http import HttpResponse
 from django.views.generic import View
 
-import provider.oauth2.views
-import provider.oauth2.forms
-import provider.scope
 from provider.oauth2.models import AccessToken
-from provider.oauth2.views import OAuthError, OAuth2AccessTokenMixin
+from provider.oauth2.views import AccessTokenView, Authorize, OAuthError, OAuth2AccessTokenMixin
 from provider.oauth2.views import Capture, Redirect  # pylint: disable=unused-import
+import provider.scope
 
 import oauth2_provider.oidc as oidc
 from oauth2_provider import constants
@@ -78,7 +76,7 @@ class OIDCTokenMixin(OAuth2AccessTokenMixin):
 
         # Get the main fields for OAuth2 response.
         response_data = super(OIDCTokenMixin, self).access_token_response_data(access_token, response_type)
-        if response_type and not response_type.endswith(' token'):
+        if response_type and 'token' not in response_type.split():
             del response_data['access_token']
             del response_data['token_type']
 
@@ -119,7 +117,7 @@ class OIDCTokenMixin(OAuth2AccessTokenMixin):
 
 
 # pylint: disable=abstract-method
-class Authorize(OIDCTokenMixin, provider.oauth2.views.Authorize):
+class Authorize(OIDCTokenMixin, Authorize):
     """
     edX customized authorization view:
       - Introduces trusted clients, which do not require user consent.
@@ -140,7 +138,7 @@ class Authorize(OIDCTokenMixin, provider.oauth2.views.Authorize):
 
 
 # pylint: disable=abstract-method
-class AccessTokenView(provider.oauth2.views.AccessTokenView, OIDCTokenMixin):
+class AccessTokenView(AccessTokenView, OIDCTokenMixin):
     """
     Customized OAuth2 access token view.
 
@@ -156,8 +154,7 @@ class AccessTokenView(provider.oauth2.views.AccessTokenView, OIDCTokenMixin):
     """
 
     # Add custom authentication provider, to support email as username.
-    authentication = (provider.oauth2.views.AccessTokenView.authentication +
-                      (PublicPasswordBackend, ))
+    authentication = (AccessTokenView.authentication + (PublicPasswordBackend, ))
 
     # The following grant overrides make sure the view uses our customized forms.
 

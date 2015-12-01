@@ -4,7 +4,7 @@ Tests various flows through using the Authorization Endpoint.
 from urlparse import urlparse, parse_qs
 
 import ddt
-import provider.oauth2.models
+from provider.oauth2.models import AccessToken
 import provider.scope
 
 from oauth2_provider.tests.base import OAuth2TestCase, IDTokenTestCase
@@ -29,7 +29,7 @@ class ImplicitFlowTestCase(IDTokenTestCase):
         """
         DRY helper.  Find the access token generated during our auth request.
         """
-        return provider.oauth2.models.AccessToken.objects.get(
+        return AccessToken.objects.get(
             user=self.user, client=self.auth_client, scope=provider.scope.to_int(*scope.split())
         )
 
@@ -55,10 +55,9 @@ class ImplicitFlowTestCase(IDTokenTestCase):
         # check scope
         self.assertEqual(set(auth_payload['scope'].split()), set(scope.split()))
 
-        expected_token = self._get_access_token(scope)
-
         # ensure the access token and token type are present or not, based on the response type
         if response_type == 'id_token token':
+            expected_token = self._get_access_token(scope)
             self.assertEqual(auth_payload['token_type'], 'Bearer')
             self.assertEqual(auth_payload['access_token'], expected_token.token)
         else:
