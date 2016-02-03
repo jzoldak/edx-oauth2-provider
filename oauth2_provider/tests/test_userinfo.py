@@ -1,5 +1,5 @@
 # pylint: disable=missing-docstring
-from .base import UserInfoTestCase
+from oauth2_provider.tests.base import UserInfoTestCase
 
 
 class UserInfoViewTest(UserInfoTestCase):

@@ -12,7 +12,7 @@ from provider.forms import OAuthValidationError
 from provider.oauth2.forms import ScopeChoiceField
 from provider.oauth2.models import Client
 
-from .constants import SCOPE_NAMES
+from oauth2_provider.constants import SCOPE_NAMES
 
 
 # The following forms override the scope field to use the SCOPE_NAMES

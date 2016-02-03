@@ -3,7 +3,7 @@ OAuth2 provider `django-oauth2-provider` authentication backends
 
 """
 
-from .forms import PublicPasswordGrantForm
+from oauth2_provider.forms import PublicPasswordGrantForm
 
 
 class PublicPasswordBackend(object):

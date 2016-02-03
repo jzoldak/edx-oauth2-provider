@@ -6,7 +6,7 @@ from factory.django import DjangoModelFactory
 import provider.oauth2.models
 from provider.constants import CONFIDENTIAL
 
-from .. import models
+import oauth2_provider.models
 
 
 class UserFactory(DjangoModelFactory):
@@ -40,7 +40,7 @@ class ClientFactory(DjangoModelFactory):
 
 class TrustedClientFactory(DjangoModelFactory):
     class Meta:
-        model = models.TrustedClient
+        model = oauth2_provider.models.TrustedClient
 
 
 class AccessTokenFactory(DjangoModelFactory):
